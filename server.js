@@ -4,6 +4,8 @@ const express = require('express');
 const app = express();
 const jwt = require('jsonwebtoken');
 
+const pool = require('./db');
+
 app.use(express.json());
 
 const atms =  [
@@ -51,8 +53,31 @@ const atms =  [
       }
 ];
 
-app.get("/atms", authenticateToken, (req, res) => {
-    res.json(atms);
+// app.get("/atms", authenticateToken, (req, res) => {
+//     res.json(atms);
+// });
+
+app.get("/atms", authenticateToken, async (req, res) => { // Ruta je sada 'async'
+    try {
+       
+        const result = await pool.query('SELECT id, type, address, coordinate_e AS "E", coordinate_n AS "N" FROM public.atm');
+
+        
+        const formattedAtms = result.rows.map(atm => ({
+            id: atm.id,
+            type: atm.type,
+            address: atm.address, 
+            coordinates: {
+                E: parseFloat(atm.E), 
+                N: parseFloat(atm.N)  
+            }
+        }));
+
+        res.json(formattedAtms);
+    } catch (error) {
+        console.error('Error fetching ATMs from database:', error);
+        res.status(500).json({ message: 'Server error while fetching ATMs' });
+    }
 });
 
 
