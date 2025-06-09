@@ -1,23 +1,22 @@
 require('dotenv').config();
 
 const express = require('express');
+const cors = require('cors');
 const app = express();
 const jwt = require('jsonwebtoken');
 const pool = require('./db'); 
 app.use(express.json());
+app.use(cors());
 
 let refreshTokens = [];
 
-// VAŽNA NAPOMENA: Ovaj 'users' array je još uvijek hardkodiran.
-// U produkcijskoj aplikaciji, korisnici bi se trebali spremati i provjeravati iz baze podataka
-// (kao što smo radili u ranijim primjerima za registraciju i login s bazom).
+
 const users = [
-  { username: 'john', password: 'password123', role: 'user' },
-  { username: 'jane', password: 'securepassword', role: 'user' },
-  { username: 'admin', password: 'adminpass', role: 'admin' }
+  { username: 'korisnik', password: 'korisnik', role: 'user' },
+  { username: 'korisnik1', password: 'korisnik1', role: 'user' },
+  { username: 'admin', password: 'admin', role: 'admin' }
 ];
 
-// --- JWT I AUTENTIFIKACIJSKE RUTE ---
 
 app.post('/token', (req, res) => {
   const refreshToken = req.body.token;
@@ -63,7 +62,6 @@ function authenticateToken(req, res, next) {
   if (token == null) return res.sendStatus(401);
 
   jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, user) => {
-    // console.log(err); // Dobro za debug, ukloni u produkciji
     if (err) return res.sendStatus(403);
     req.user = user;
     next();
@@ -74,7 +72,7 @@ function authorizeAdmin(req, res, next) {
   if (req.user && req.user.role === 'admin') {
     next();
   } else {
-    res.sendStatus(403); // Forbidden
+    res.sendStatus(403); 
   }
 }
 
@@ -82,12 +80,37 @@ app.get('/admin-dashboard', authenticateToken, authorizeAdmin, (req, res) => {
   res.send('Welcome to the Admin Dashboard, ' + req.user.name + '!');
 });
 
-// --- ATM RUTE (CRUD) ---
-
-// GET Svi bankomati (zaštićeno tokenom)
 app.get("/atms", authenticateToken, async (req, res) => {
   try {
-    const result = await pool.query('SELECT id, type, address, coordinate_e AS "E", coordinate_n AS "N" FROM public.atm');
+    const { type, address, sortBy, sortOrder } = req.query; 
+
+    let query = 'SELECT id, type, address, coordinate_e AS "E", coordinate_n AS "N" FROM public.atm';
+    const queryParams = [];
+    const conditions = [];
+    let paramIndex = 1;
+
+    // Add filters
+    if (type) {
+      conditions.push(`type ILIKE $${paramIndex++}`); 
+      queryParams.push(`%${type}%`);
+    }
+    if (address) {
+      conditions.push(`address ILIKE $${paramIndex++}`); 
+      queryParams.push(`%${address}%`);
+    }
+
+    if (conditions.length > 0) {
+      query += ` WHERE ${conditions.join(' AND ')}`;
+    }
+
+    // Add sorting
+    const allowedSortBy = ['id', 'type', 'address'];
+    const effectiveSortBy = allowedSortBy.includes(sortBy) ? sortBy : 'id';
+    const effectiveSortOrder = (sortOrder && sortOrder.toLowerCase() === 'desc') ? 'DESC' : 'ASC'; 
+
+    query += ` ORDER BY ${effectiveSortBy} ${effectiveSortOrder}`;
+
+    const result = await pool.query(query, queryParams);
 
     const formattedAtms = result.rows.map(atm => ({
       id: atm.id,
@@ -106,11 +129,30 @@ app.get("/atms", authenticateToken, async (req, res) => {
   }
 });
 
-// POST Dodaj novi bankomat (zaštićeno: zahtijeva admin ulogu)
+// app.get("/atms", authenticateToken, async (req, res) => {
+//   try {
+//     const result = await pool.query('SELECT id, type, address, coordinate_e AS "E", coordinate_n AS "N" FROM public.atm');
+
+//     const formattedAtms = result.rows.map(atm => ({
+//       id: atm.id,
+//       type: atm.type,
+//       address: atm.address,
+//       coordinates: {
+//         E: parseFloat(atm.E),
+//         N: parseFloat(atm.N)
+//       }
+//     }));
+
+//     res.json(formattedAtms);
+//   } catch (error) {
+//     console.error('Error fetching ATMs from database:', error);
+//     res.status(500).json({ message: 'Server error while fetching ATMs' });
+//   }
+// });
+
 app.post("/atms", authenticateToken, authorizeAdmin, async (req, res) => {
   const { type, address, coordinate_e, coordinate_n } = req.body;
 
-  // Osnovna validacija
   if (!type || !address || coordinate_e == null || coordinate_n == null) {
     return res.status(400).json({ message: 'All fields (type, address, coordinate_e, coordinate_n) are required.' });
   }
@@ -138,12 +180,10 @@ app.post("/atms", authenticateToken, authorizeAdmin, async (req, res) => {
   }
 });
 
-// PUT Ažuriraj postojeći bankomat (zaštićeno: zahtijeva admin ulogu)
 app.put("/atms/:id", authenticateToken, authorizeAdmin, async (req, res) => {
   const { id } = req.params;
   const { type, address, coordinate_e, coordinate_n } = req.body;
 
-  // Provjeri je li barem jedno polje za ažuriranje poslano
   if (!type && !address && coordinate_e == null && coordinate_n == null) {
     return res.status(400).json({ message: 'At least one field (type, address, coordinate_e, coordinate_n) is required for update.' });
   }
@@ -160,11 +200,11 @@ app.put("/atms/:id", authenticateToken, authorizeAdmin, async (req, res) => {
     updates.push(`address = $${paramIndex++}`);
     values.push(address);
   }
-  if (coordinate_e !== undefined && coordinate_e !== null) { // Dopusti 0 kao validnu koordinatu
+  if (coordinate_e !== undefined && coordinate_e !== null) { 
     updates.push(`coordinate_e = $${paramIndex++}`);
     values.push(coordinate_e);
   }
-  if (coordinate_n !== undefined && coordinate_n !== null) { // Dopusti 0 kao validnu koordinatu
+  if (coordinate_n !== undefined && coordinate_n !== null) { 
     updates.push(`coordinate_n = $${paramIndex++}`);
     values.push(coordinate_n);
   }
@@ -173,7 +213,7 @@ app.put("/atms/:id", authenticateToken, authorizeAdmin, async (req, res) => {
       return res.status(400).json({ message: 'No valid fields provided for update.' });
   }
 
-  values.push(id); // Dodaj ID na kraj niza vrijednosti
+  values.push(id); 
 
   try {
     const queryText = `
@@ -205,7 +245,6 @@ app.put("/atms/:id", authenticateToken, authorizeAdmin, async (req, res) => {
   }
 });
 
-// DELETE Obriši bankomat (zaštićeno: zahtijeva admin ulogu)
 app.delete("/atms/:id", authenticateToken, authorizeAdmin, async (req, res) => {
   const { id } = req.params;
 
@@ -216,7 +255,7 @@ app.delete("/atms/:id", authenticateToken, authorizeAdmin, async (req, res) => {
       return res.status(404).json({ message: 'ATM not found.' });
     }
 
-    res.status(204).send(); // 204 No Content - uspješno obrisano, nema sadržaja za povrat
+    res.status(204).send(); 
   } catch (error) {
     console.error('Error deleting ATM:', error);
     res.status(500).json({ message: 'Server error while deleting ATM' });
